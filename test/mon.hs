@@ -5,20 +5,35 @@ import System.Exit(exitFailure)
 import Network.Socket hiding (send, sendTo, recv, recvFrom)
 import Network.Socket.ByteString (send, recv)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as B8
 import Control.Concurrent.Chan
+import Data.Word(Word8)
+import Text.Parsec.ByteString
 
-type Destination = String
-type Message = String
-type SubscribeCallback = (Destination -> IO ())
+type StompVersion = String
 
-data StompState = Disconnected
-                | SocketConnected
-                | ClientReady
-                | ClientSending Destination Message 
-                | SubscriptionPending Destination
-                | UnsubscriptionPending Destination
-                | ClientHandling Destination Message
-                | Disconnecting
+type StompHeader = (String, String)
+
+data StompCommand = StompConnect 
+                  | StompDisconnect
+
+data StompEvent = StompConnected StompVersion
+                | StompGenericEvent String [StompHeader] (Maybe [Word8])
+
+data StompClient = StompClient { scSocket :: Socket, scReceiveChan :: Chan String }
+
+
+stompSend :: StompClient -> StompCommand -> IO()
+stompSend client cmd = do
+    send (scSocket client) $ B8.pack . bytes $ cmd 
+    return ()
+  where 
+    bytes StompConnect = "CONNECT\n\n\NUL"
+    bytes StompDisconnect = "DISCONNECT\n\n\NUL"
+
+stompRecv :: StompClient -> IO String
+stompRecv client = 
+    B8.unpack `fmap` recv (scSocket client) 4096
 
 main = do
     args <- getArgs
@@ -29,18 +44,22 @@ main = do
         putStrLn "UsageL mon <host> [port]"
         exitFailure
     where
-      mainLoop :: Chan a -> IO ()
-      mainLoop _ = do
+      mainLoop :: StompClient -> IO ()
+      mainLoop client = do
+        stompSend client StompConnect
+        putStrLn =<< stompRecv client
         putStrLn "Press a key to interrupt..."
         getChar
         putStrLn "...interrupted"
+        stompSend client StompDisconnect
 
-withClientDo :: String -> Int -> (Chan a -> IO b) -> IO b
+withClientDo :: String -> Int -> (StompClient -> IO b) -> IO b
 withClientDo host port act = do
     sock <- connectTo host port
     putStrLn "Connected"
     chan <- newChan
-    res <- act chan
+    let client = StompClient sock chan
+    res <- act client
     sClose sock
     putStrLn "Disconnected"
     return res
