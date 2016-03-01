@@ -16,11 +16,13 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lib
+                     , Funque.Stomp.Parser
   build-depends:       base >= 4.7 && < 5
                      , network
                      , bytestring
                      , event
                      , parsec
+                     , HUnit
   default-language:    Haskell2010
 
 executable funque-exe
@@ -37,6 +39,7 @@ test-suite funque-test
   main-is:             Spec.hs
   build-depends:       base
                      , funque
+                     , HUnit
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
