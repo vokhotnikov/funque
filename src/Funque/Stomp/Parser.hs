@@ -1,9 +1,15 @@
-module Funque.Stomp.Parser where
+module Funque.Stomp.Parser 
+( StompFrame(..)
+, StompHeader
+, StompBody
+, parseFrame
+, serializeFrame) where 
 
 import Data.Word(Word8)
-import Data.ByteString(ByteString)
+import Data.Maybe(fromMaybe)
+import Data.ByteString hiding (notElem)
 import Data.ByteString.Internal(c2w,w2c)
-import Text.Parsec((<?>), many, many1, optionMaybe, parse, ParseError)
+import Text.Parsec((<?>), (<|>), many, many1, optionMaybe, parse, ParseError)
 import Text.Parsec.ByteString
 import Text.Parsec.Prim(tokenPrim)
 import Text.Parsec.Pos (updatePosChar, updatePosString)
@@ -18,7 +24,15 @@ parseFrame :: ByteString -> Either ParseError StompFrame
 parseFrame = parse p_frame "STOMP stream"
 
 serializeFrame :: StompFrame -> ByteString
-serializeFrame f = undefined
+serializeFrame (StompFrame cmd hdrs body) = 
+    intercalate lf' parts
+  where
+    parts = [pack' cmd] ++
+      (pack' . makeHeader) `fmap` hdrs ++
+      [empty, pack $ fromMaybe [] body ++ [0]]
+    lf' = pack [10]
+    pack' = pack . (fmap c2w)
+    makeHeader (n,v) = n ++ ":" ++ v
 
 satisfy :: (Word8 -> Bool) -> Parser Word8
 satisfy f   = tokenPrim (\c -> show [c])
@@ -62,7 +76,7 @@ p_frame = do
     p_lf
     headers <- many p_header
     p_lf
-    body <- optionMaybe $ many p_notNull
+    body <- optionMaybe $ many1 p_notNull
     p_null
     many p_lf
     return $ StompFrame cmd headers body
