@@ -2,6 +2,7 @@ module Funque.Stomp.Parser
 ( StompFrame(..)
 , StompHeader
 , StompBody
+, StompParseError
 , parseFrame
 , serializeFrame) where 
 
@@ -20,7 +21,9 @@ type StompBody = [Word8]
 
 data StompFrame = StompFrame String [StompHeader] (Maybe StompBody) deriving (Show, Eq)
 
-parseFrame :: ByteString -> Either ParseError StompFrame 
+type StompParseError = ParseError 
+
+parseFrame :: ByteString -> Either StompParseError StompFrame 
 parseFrame = parse p_frame "STOMP stream"
 
 serializeFrame :: StompFrame -> ByteString
