@@ -4,6 +4,8 @@ import Network.Socket.ByteString (send, recv)
 import Control.Exception (bracket, finally)
 import qualified Data.ByteString as B
 import Data.Word (Word16)
+import Data.List (lookup)
+import Data.Maybe (fromMaybe)
 
 type Host = String
 
@@ -43,6 +45,7 @@ data StompEvent = StompConnected StompVersion
                 | StompMessage StompDestination StompMessageId StompMessageBody [StompHeader]
                 | StompReceipt StompReceiptId
                 | StompError { getStompErrorMessage :: String, getStompErrorDetails :: Maybe String }
+                | StompGenericEvent StompFrame
 
 instance Show StompEvent where
     show (StompConnected version) = "Connected (ver. " ++ version ++ ")"
@@ -50,16 +53,25 @@ instance Show StompEvent where
 
 stompSend :: Socket -> StompCommand -> IO ()
 stompSend sock cmd = do 
-    send sock $ (serializeFrame . toFrame) cmd
+    let frame = toFrame cmd
+    send sock $ serializeFrame frame
+    putStrLn $ "Sent: " ++ (show frame)
     return ()
   where
     toFrame StompConnect = StompFrame "CONNECT" [] Nothing
     toFrame StompDisconnect = StompFrame "DISCONNECT" [] Nothing
     toFrame _ = undefined
-    
 
 stompReceive :: Socket -> IO (Either StompParseError StompEvent)
-stompReceive = undefined
+stompReceive sock = do
+    bytes <- recv sock 4096
+    let frame = parseFrame bytes
+    putStrLn $ "Got: " ++ (either show show frame)
+    return $ frameToEvent `fmap` frame
+  where
+    frameToEvent :: StompFrame -> StompEvent
+    frameToEvent (StompFrame "CONNECTED" hs Nothing) = StompConnected $ fromMaybe "1.0" (lookup "version" hs)
+    frameToEvent f = StompGenericEvent f
 
 withBroker :: BrokerConfig -> (BrokerContext -> IO a) -> IO a
 withBroker host act = withSocketsDo $ bracket (connectTo host 61613) close $ \sock -> do
@@ -80,12 +92,12 @@ withBroker host act = withSocketsDo $ bracket (connectTo host 61613) close $ \so
 
 main = do
     brokerConfig <- resolveConfig
-    withBroker brokerConfig $ \ctx -> 
-      withHandler ctx handleIncoming $ \_ -> do
+    withBroker brokerConfig $ \ctx -> do
+--      withHandler ctx handleIncoming $ \_ -> do
         putStrLn "Press a key to stop.."
         getChar
 
-  where resolveConfig = return "localhost"
+  where resolveConfig = return "192.168.222.254"
         handleIncoming :: Handler MyIncomingMessage
         handleIncoming ctx ListVpnExclusions = replyWith ctx $ CurrentVpnExclusions ["192.168.222.104"]  
         handleIncoming _ _ = undefined
