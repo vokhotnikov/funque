@@ -6,6 +6,9 @@ import qualified Data.ByteString as B
 import Data.Word (Word16)
 import Data.List (lookup)
 import Data.Maybe (fromMaybe)
+import Control.Concurrent
+import Control.Concurrent.Chan
+import Control.Monad (forever)
 
 type Host = String
 
@@ -19,7 +22,7 @@ data MyOutgoingMessage = CurrentVpnExclusions [Host]
 
 type BrokerConfig = String
 
-type BrokerContext = ()
+newtype BrokerContext = BrokerContext { bcSocket :: Socket }
 
 type Handler a = BrokerContext -> a -> IO ()
 
@@ -27,7 +30,7 @@ type StompVersion = String
 
 type StompDestination = String
 
-data StompAckMode = ClientAck | AutoAck
+data StompAckMode = StompClientAck | StompAutoAck
 
 type StompMessageId = String
 
@@ -37,9 +40,9 @@ type StompMessageBody = String
 
 data StompCommand = StompConnect
                   | StompDisconnect
-                  | SubscribeTo StompDestination StompAckMode
-                  | UnsubscribeFrom StompDestination
-                  | AckMessage StompMessageId
+                  | StompSubscribeTo StompDestination StompAckMode
+                  | StompUnsubscribeFrom StompDestination
+                  | StompAckMessage StompMessageId
 
 data StompEvent = StompConnected StompVersion
                 | StompMessage StompDestination StompMessageId StompMessageBody [StompHeader]
@@ -58,13 +61,24 @@ stompSend sock cmd = do
     putStrLn $ "Sent: " ++ (show frame)
     return ()
   where
+    toFrame :: StompCommand -> StompFrame
     toFrame StompConnect = StompFrame "CONNECT" [] Nothing
     toFrame StompDisconnect = StompFrame "DISCONNECT" [] Nothing
+    toFrame (StompSubscribeTo d ack) = 
+        StompFrame "SUBSCRIBE" [("destination", d), ("ack", ackValue ack)] Nothing
+    toFrame (StompUnsubscribeFrom d) = 
+        StompFrame "UNSUBSCRIBE" [("destination", d)] Nothing
     toFrame _ = undefined
+    ackValue :: StompAckMode -> String
+    ackValue StompClientAck = "client"
+    ackValue StompAutoAck= "auto"
+
 
 stompReceive :: Socket -> IO (Either StompParseError StompEvent)
 stompReceive sock = do
     bytes <- recv sock 4096
+    -- TODO: handle zero length result
+    -- TODO: what to do for longer messages?
     let frame = parseFrame bytes
     putStrLn $ "Got: " ++ (either show show frame)
     return $ frameToEvent `fmap` frame
@@ -75,10 +89,12 @@ stompReceive sock = do
 
 withBroker :: BrokerConfig -> (BrokerContext -> IO a) -> IO a
 withBroker host act = withSocketsDo $ bracket (connectTo host 61613) close $ \sock -> do
-    stompSend sock StompConnect
-    received <- stompReceive sock
-    either print print received
-    (act ()) `finally` (stompSend sock StompDisconnect)
+    ch <- newChan
+    bracket (forkIO $ receiveLoop sock ch) killThread $ \_ -> do
+      stompSend sock StompConnect
+      received <- readChan ch
+      either print print received
+      (act $ BrokerContext sock) `finally` (stompSend sock StompDisconnect)
   where 
     connectTo :: String -> Word16 -> IO Socket
     connectTo host port = do
@@ -86,23 +102,35 @@ withBroker host act = withSocketsDo $ bracket (connectTo host 61613) close $ \so
       let serverAddr = head addrInfo
       sock <- socket (addrFamily serverAddr) Stream defaultProtocol
       setSocketOption sock ReuseAddr 1 
+      setSocketOption sock KeepAlive 1 
       putStrLn $ "About to connect to " ++ (show . addrAddress $ serverAddr)
       connect sock (addrAddress serverAddr)
       return sock
+    receiveLoop :: Socket -> Chan (Either StompParseError StompEvent) -> IO ()
+    receiveLoop sock ch = forever $ do
+      m <- stompReceive sock
+      m `seq` writeChan ch m
 
 main = do
     brokerConfig <- resolveConfig
-    withBroker brokerConfig $ \ctx -> do
---      withHandler ctx handleIncoming $ \_ -> do
+    withBroker brokerConfig $ \ctx ->
+      withHandler ctx handleIncoming $ \_ -> do
         putStrLn "Press a key to stop.."
         getChar
 
   where resolveConfig = return "192.168.222.254"
         handleIncoming :: Handler MyIncomingMessage
-        handleIncoming ctx ListVpnExclusions = replyWith ctx $ CurrentVpnExclusions ["192.168.222.104"]  
-        handleIncoming _ _ = undefined
+        handleIncoming ctx ListVpnExclusions = do 
+            --replyWith ctx $ CurrentVpnExclusions ["192.168.222.104"]  
+            return ()
+        handleIncoming _ _ =  return ()
         withHandler :: BrokerContext -> Handler a -> (BrokerContext -> IO b) -> IO b
-        withHandler = undefined
+        withHandler ctx _ act = let
+            sock = bcSocket ctx
+            cmdSub = StompSubscribeTo "test.topic" StompAutoAck
+            cmdUnsub = StompUnsubscribeFrom "test.topic"
+          in do
+            bracket (stompSend sock cmdSub) (const $ stompSend sock cmdUnsub) (const $ act ctx)
         replyWith :: BrokerContext -> a -> IO BrokerContext
         replyWith = undefined
         
