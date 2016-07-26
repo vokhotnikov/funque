@@ -118,7 +118,7 @@ main = do
         putStrLn "Press a key to stop.."
         getChar
 
-  where resolveConfig = return "192.168.222.254"
+  where resolveConfig = return "127.0.0.1"
         handleIncoming :: Handler MyIncomingMessage
         handleIncoming ctx ListVpnExclusions = do 
             --replyWith ctx $ CurrentVpnExclusions ["192.168.222.104"]  
